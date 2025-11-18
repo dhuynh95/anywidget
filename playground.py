@@ -12,11 +12,11 @@ class ChatWidget(anywidget.AnyWidget):
     function render({ model, el }) {
       // Container
       let container = document.createElement("div");
-      container.style.cssText = "display: flex; flex-direction: column; gap: 10px; padding: 10px; max-width: 600px; font-family: sans-serif;";
+      container.style.cssText = "display: flex; flex-direction: column; gap: 10px; padding: 10px; max-width: 900px; font-family: sans-serif;";
 
       // Messages container
       let messagesDiv = document.createElement("div");
-      messagesDiv.style.cssText = "border: 1px solid #ccc; border-radius: 5px; padding: 10px; max-height: 400px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;";
+      messagesDiv.style.cssText = "border: 1px solid #ccc; border-radius: 5px; padding: 10px; max-height: 500px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;";
 
       // Streaming message preview
       let streamingDiv = document.createElement("div");
@@ -35,16 +35,85 @@ class ChatWidget(anywidget.AnyWidget):
       sendBtn.textContent = "Send";
       sendBtn.style.cssText = "padding: 8px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;";
 
-      // Render messages from trait
+      // Render messages with Claude Code format support
       function renderMessages() {
         messagesDiv.innerHTML = "";
         let messages = model.get("messages");
-        messages.forEach(msg => {
-          let msgEl = document.createElement("div");
-          msgEl.style.cssText = `padding: 8px; border-radius: 5px; ${msg.role === "user" ? "background: #e3f2fd; align-self: flex-end;" : "background: #f5f5f5; align-self: flex-start;"}`;
-          msgEl.innerHTML = `<strong>${msg.role}:</strong> ${msg.content}`;
-          messagesDiv.appendChild(msgEl);
+
+        messages.forEach((msg, idx) => {
+          let msgDiv = document.createElement("div");
+          msgDiv.style.cssText = "padding: 10px; border-radius: 5px; border-left: 4px solid;";
+
+          // Determine message type (support both 'type' and 'role' fields)
+          let msgType = msg.type || (msg.role === "user" ? "user" : "assistant");
+
+          // Style based on message type
+          if (msgType === "system") {
+            msgDiv.style.backgroundColor = "#f5f5f5";
+            msgDiv.style.borderColor = "#999";
+          } else if (msgType === "assistant") {
+            msgDiv.style.backgroundColor = "#e3f2fd";
+            msgDiv.style.borderColor = "#2196f3";
+          } else if (msgType === "user") {
+            msgDiv.style.backgroundColor = "#f1f8e9";
+            msgDiv.style.borderColor = "#8bc34a";
+          }
+
+          // Message header with number and type
+          let header = document.createElement("div");
+          header.style.cssText = "font-weight: bold; margin-bottom: 8px; color: #333; font-size: 12px;";
+          header.textContent = `[${idx + 1}] ${msgType.toUpperCase()}`;
+          msgDiv.appendChild(header);
+
+          // Message content
+          let contentDiv = document.createElement("div");
+          contentDiv.style.cssText = "font-size: 14px;";
+
+          // Handle different content formats
+          if (msgType === "system") {
+            // System messages show data
+            contentDiv.style.cssText += "white-space: pre-wrap; font-family: monospace; font-size: 12px;";
+            contentDiv.textContent = JSON.stringify(msg.data || msg, null, 2);
+          } else if (msg.content) {
+            // Handle string content (simple format)
+            if (typeof msg.content === "string") {
+              contentDiv.style.cssText += "white-space: pre-wrap;";
+              contentDiv.textContent = msg.content;
+            }
+            // Handle array of content blocks (Claude Code format)
+            else if (Array.isArray(msg.content)) {
+              msg.content.forEach(block => {
+                let blockDiv = document.createElement("div");
+                blockDiv.style.cssText = "margin-top: 6px;";
+
+                if (block.type === "text") {
+                  blockDiv.style.cssText += "white-space: pre-wrap;";
+                  blockDiv.textContent = block.text;
+                } else if (block.type === "tool_use") {
+                  blockDiv.style.cssText += "padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px; font-family: monospace; font-size: 12px;";
+                  blockDiv.innerHTML = `<strong>[tool_use: ${block.name}]</strong><br>id: ${block.id}<br>input: ${JSON.stringify(block.input, null, 2)}`;
+                } else if (block.type === "tool_result") {
+                  blockDiv.style.cssText += "padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px; font-family: monospace; font-size: 12px; white-space: pre-wrap;";
+                  let resultPreview = typeof block.content === "string"
+                    ? block.content.substring(0, 300)
+                    : JSON.stringify(block.content, null, 2).substring(0, 300);
+                  if (resultPreview.length >= 300) resultPreview += "...";
+                  blockDiv.innerHTML = `<strong>[tool_result]</strong><br>${resultPreview}`;
+                } else {
+                  blockDiv.style.cssText += "padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px; font-family: monospace; font-size: 12px;";
+                  blockDiv.textContent = JSON.stringify(block, null, 2);
+                }
+
+                contentDiv.appendChild(blockDiv);
+              });
+            }
+          }
+
+          msgDiv.appendChild(contentDiv);
+          messagesDiv.appendChild(msgDiv);
         });
+
+        // Auto-scroll to bottom
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
       }
 
@@ -94,135 +163,75 @@ class ChatWidget(anywidget.AnyWidget):
 
     messages = traitlets.List([]).tag(sync=True)
 
-    def __init__(self, **kwargs):
+    def __init__(self, handler=None, **kwargs):
         super().__init__(**kwargs)
+        self.handler = handler or self._mock_chat_handler
         self.on_msg(self._handle_custom_msg)
 
     def _handle_custom_msg(self, content, buffers):
         if content.get("type") == "user_message":
             user_content = content.get("content", "")
-            # Add user message to history
-            self.messages = self.messages + [{"role": "user", "content": user_content}]
+            # Add user message in Claude Code format
+            self.messages = self.messages + [
+                {
+                    "type": "user",
+                    "content": [{"type": "text", "text": user_content}],
+                }
+            ]
             # Start streaming response in background thread
             threading.Thread(target=self._stream_response, daemon=True).start()
 
     def _stream_response(self):
-        """Stream complete messages one by one"""
+        """Stream complete messages one by one."""
         self.send({"type": "stream_start"})
 
-        # Stream each message as it's yielded
-        for message in self._mock_chat_handler():
+        # Stream each message as it's yielded from handler
+        for message in self.handler():
             self.messages = self.messages + [message]
             time.sleep(0.5)  # Delay between messages for visual effect
 
         self.send({"type": "stream_end"})
 
     def _mock_chat_handler(self):
-        """Mock streaming chat handler that yields discrete messages"""
+        """Mock streaming chat handler that yields Claude Code format messages."""
         # Simulate multi-step response like tool use
-        yield {"role": "assistant", "content": "Let me check the weather for you..."}
-        yield {"role": "assistant", "content": "🔧 Calling weather API..."}
         yield {
-            "role": "assistant",
-            "content": "📊 Got results: Temperature 72°F, Sunny",
+            "type": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check the weather for you..."}
+            ],
         }
         yield {
-            "role": "assistant",
-            "content": "The weather is sunny today with a temperature of 72°F!",
-        }
-
-
-class ClaudeSessionWidget(anywidget.AnyWidget):
-    _esm = """
-    function render({ model, el }) {
-      let container = document.createElement("div");
-      container.style.cssText = "font-family: monospace; max-width: 900px; padding: 10px;";
-
-      function renderMessages() {
-        container.innerHTML = "";
-        let messages = model.get("messages");
-
-        messages.forEach((msg, idx) => {
-          let msgDiv = document.createElement("div");
-          msgDiv.style.cssText = `margin-bottom: 15px; padding: 10px; border-radius: 5px; border-left: 4px solid;`;
-
-          // Style based on message type
-          if (msg.type === "system") {
-            msgDiv.style.backgroundColor = "#f5f5f5";
-            msgDiv.style.borderColor = "#999";
-          } else if (msg.type === "assistant") {
-            msgDiv.style.backgroundColor = "#e3f2fd";
-            msgDiv.style.borderColor = "#2196f3";
-          } else if (msg.type === "user") {
-            msgDiv.style.backgroundColor = "#f1f8e9";
-            msgDiv.style.borderColor = "#8bc34a";
-          }
-
-          // Message header
-          let header = document.createElement("div");
-          header.style.cssText = "font-weight: bold; margin-bottom: 8px; color: #333;";
-          header.textContent = `[${idx + 1}] ${msg.type.toUpperCase()}`;
-          msgDiv.appendChild(header);
-
-          // Message content
-          let content = document.createElement("div");
-          content.style.cssText = "white-space: pre-wrap; font-size: 13px;";
-
-          if (msg.type === "system") {
-            content.textContent = JSON.stringify(msg.data || msg, null, 2);
-          } else if (msg.content) {
-            if (typeof msg.content === "string") {
-              content.textContent = msg.content;
-            } else if (Array.isArray(msg.content)) {
-              msg.content.forEach(block => {
-                let blockDiv = document.createElement("div");
-                blockDiv.style.cssText = "margin-top: 8px; padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px;";
-
-                if (block.type === "text") {
-                  blockDiv.innerHTML = `<strong>[text]</strong><br>${block.text}`;
-                } else if (block.type === "tool_use") {
-                  blockDiv.innerHTML = `<strong>[tool_use: ${block.name}]</strong><br>id: ${block.id}<br>input: ${JSON.stringify(block.input, null, 2)}`;
-                } else if (block.type === "tool_result") {
-                  let resultPreview = JSON.stringify(block.content, null, 2).substring(0, 200) + "...";
-                  blockDiv.innerHTML = `<strong>[tool_result]</strong><br>tool_use_id: ${block.tool_use_id}<br>preview: ${resultPreview}`;
-                } else {
-                  blockDiv.textContent = JSON.stringify(block, null, 2);
+            "type": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_weather_123",
+                    "name": "get_weather",
+                    "input": {"location": "current"},
                 }
+            ],
+        }
+        yield {
+            "type": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_weather_123",
+                    "content": '{"temperature": 72, "condition": "Sunny"}',
+                }
+            ],
+        }
+        yield {
+            "type": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "The weather is sunny today with a temperature of 72°F!",
+                }
+            ],
+        }
 
-                content.appendChild(blockDiv);
-              });
-            }
-          }
-
-          msgDiv.appendChild(content);
-          container.appendChild(msgDiv);
-        });
-      }
-
-      model.on("change:messages", renderMessages);
-      renderMessages();
-      el.appendChild(container);
-    }
-    export default { render };
-    """
-
-    messages = traitlets.List([]).tag(sync=True)
-
-
-print("Testing ChatWidget with streaming...")
-chat = ChatWidget()
-chat
-
-# %%
-chat.messages = chat.messages + [{"role": "assistant", "content": "Injected message!"}]
-# %%
-chat.messages = [
-    {"role": "user", "content": "What's 2+2?"},
-    {"role": "assistant", "content": "4"},
-    {"role": "user", "content": "What about 3+3?"},
-]
-chat
-# %%
 
 # Mock Claude Code session messages
 mock_session_messages = [
@@ -285,7 +294,14 @@ mock_session_messages = [
 ]
 
 # %%
-print("Testing ClaudeSessionWidget...")
-session_viewer = ClaudeSessionWidget(messages=mock_session_messages)
+print("Test 1: Interactive chat with streaming (type a message)")
+chat = ChatWidget()
+chat
+
+# %%
+
+
+print("Test 2: Pre-loaded session messages (read-only view)")
+session_viewer = ChatWidget(messages=mock_session_messages)
 session_viewer
 # %%
