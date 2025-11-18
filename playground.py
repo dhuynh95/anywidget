@@ -1,4 +1,6 @@
 # %%
+# type: ignore
+# ruff: noqa
 # Third test: Chatbot widget with streaming
 import threading
 import time
@@ -188,13 +190,29 @@ class ChatWidget(anywidget.AnyWidget):
 
     messages = traitlets.List([]).tag(sync=True)
 
-    def __init__(self, handler=None, **kwargs):
+    def __init__(self, handler=None, client=None, **kwargs):
         super().__init__(**kwargs)
+
+        # Validate: either handler OR client, not both
+        if handler and client:
+            raise ValueError("Provide either 'handler' or 'client', not both")
+
+        self.client = client
         self.handler = handler or self._mock_chat_handler
+        self._is_processing = False  # Track if client/handler is busy
         self.on_msg(self._handle_custom_msg)
 
     def _handle_custom_msg(self, content, buffers):
         if content.get("type") == "user_message":
+            # Check if already processing a message
+            if self._is_processing:
+                import warnings
+
+                warnings.warn(
+                    "Message ignored: Client is busy processing previous query"
+                )
+                return
+
             user_content = content.get("content", "")
             # Add user message in Claude Code format
             self.messages = self.messages + [
@@ -204,18 +222,63 @@ class ChatWidget(anywidget.AnyWidget):
                 }
             ]
             # Start streaming response in background thread
-            threading.Thread(target=self._stream_response, daemon=True).start()
+            threading.Thread(
+                target=self._stream_response, args=(user_content,), daemon=True
+            ).start()
 
-    def _stream_response(self):
-        """Stream complete messages one by one."""
+    def _stream_response(self, user_input):
+        """Stream complete messages one by one from client or handler."""
+        self._is_processing = True
         self.send({"type": "stream_start"})
 
-        # Stream each message as it's yielded from handler
-        for message in self.handler():
-            self.messages = self.messages + [message]
-            time.sleep(0.5)  # Delay between messages for visual effect
+        try:
+            if self.client:
+                # Use client path - stream from async client
+                for message in self._client_handler(user_input):
+                    self.messages = self.messages + [message]
+                    time.sleep(0.1)  # Small delay for visual effect
+            else:
+                # Use handler path (original behavior)
+                for message in self.handler():
+                    self.messages = self.messages + [message]
+                    time.sleep(0.5)  # Delay between messages for visual effect
+        finally:
+            self._is_processing = False
+            self.send({"type": "stream_end"})
 
-        self.send({"type": "stream_end"})
+    def _client_handler(self, user_input):
+        """Adapter: converts async client into sync generator of message dicts."""
+        import asyncio
+        from claude_code_utils import parse_messages
+
+        # Async function to query client and collect responses
+        async def async_query():
+            await self.client.query(user_input)
+            messages = []
+            async for message in self.client.receive_response():
+                messages.append(message)
+            return parse_messages(messages)
+
+        # Bridge async to sync - handle different event loop scenarios
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Event loop already running (Jupyter) - use ThreadPoolExecutor
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, async_query())
+                    parsed_messages = future.result()
+            else:
+                # No running loop - use existing loop
+                parsed_messages = loop.run_until_complete(async_query())
+        except RuntimeError:
+            # No event loop exists - create one
+            parsed_messages = asyncio.run(async_query())
+
+        # Yield each message (generator interface)
+        for msg in parsed_messages:
+            yield msg
 
     def _mock_chat_handler(self):
         """Mock streaming chat handler that yields Claude Code format messages."""
@@ -329,4 +392,66 @@ chat
 print("Test 2: Pre-loaded session messages (read-only view)")
 session_viewer = ChatWidget(messages=mock_session_messages)
 session_viewer
+
+# %%
+from typing import Any
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+
+MODEL = "claude-haiku-4-5"
+# MODEL = "claude-sonnet-4-5"
+
+# tools = [verify_highlighting, verify_extraction]
+# name = "deep-extract-mvp"
+# custom_server = create_sdk_mcp_server(
+#     name=name,
+#     version="0.1.0",
+#     tools=tools,  # Pass the decorated function
+# )
+# allowed_tools = [f"mcp__{name}__{tool.name}" for tool in tools]
+options = ClaudeAgentOptions(
+    disallowed_tools=[
+        "Task",
+        "ExitPlanMode",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "TodoWrite",
+        "WebSearch",
+        "BashOutput",
+        "KillShell",
+        "SlashCommand",
+    ],
+    allowed_tools=[
+        "Bash",
+        "Read",
+        # "Edit", "MultiEdit"
+    ],
+    permission_mode="bypassPermissions",
+    # system_prompt="You are a helpful assistant that can answer questions and help with tasks.",
+    # mcp_servers={},
+    model=MODEL,
+)
+
+client = ClaudeSDKClient(options=options)
+await client.connect()
+
+prompt = "Hello there"
+await client.query(prompt)
+
+messages = []
+async for message in client.receive_response():
+    # Process the new response
+    messages.append(message)
+    print(message)
+
+await client.disconnect()
+
+
+# chat = ChatWidget(client=client)
+# chat
+# %%
+from claude_code_utils import parse_messages
+
+chat = ChatWidget(messages=parse_messages(messages))
+chat
 # %%
