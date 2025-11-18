@@ -45,11 +45,32 @@ class ChatWidget(anywidget.AnyWidget):
         messagesDiv.innerHTML = "";
         let messages = model.get("messages");
 
+        // Display system info as first message if available
+        let systemModel = model.get("system_model");
+        let systemTools = model.get("system_tools");
+        let systemMcpServers = model.get("system_mcp_servers");
+
+        if (systemModel || systemTools.length > 0 || systemMcpServers.length > 0) {
+          let systemDiv = document.createElement("div");
+          systemDiv.style.cssText = "padding: 8px 12px; margin-bottom: 12px; font-size: 12px; color: #6c757d; border-bottom: 1px solid #e9ecef;";
+
+          let parts = [];
+          if (systemModel) parts.push(systemModel);
+          if (systemTools.length > 0) parts.push(systemTools.join(", "));
+          if (systemMcpServers.length > 0) parts.push(`MCP: ${systemMcpServers.join(", ")}`);
+
+          systemDiv.textContent = parts.join(" • ");
+          messagesDiv.appendChild(systemDiv);
+        }
+
         messages.forEach((msg) => {
           let msgDiv = document.createElement("div");
 
           // Determine message type
           let msgType = msg.type || (msg.role === "user" ? "user" : "assistant");
+
+          // Skip system messages (kept in history but not displayed)
+          if (msgType === "system") return;
 
           // Base styling - generous spacing
           msgDiv.style.cssText = "margin-bottom: 4px;";
@@ -59,12 +80,7 @@ class ChatWidget(anywidget.AnyWidget):
           contentDiv.style.cssText = "font-size: 15px; line-height: 1.6; color: #2c3e50;";
 
           // Style based on message type
-          if (msgType === "system") {
-            // System: subtle gray background, compact
-            msgDiv.style.cssText += "background: #f5f5f5; padding: 12px 16px; border-radius: 6px;";
-            contentDiv.style.cssText = "font-family: monospace; font-size: 12px; color: #6c757d; white-space: pre-wrap;";
-            contentDiv.textContent = JSON.stringify(msg.data || msg, null, 2);
-          } else if (msgType === "assistant") {
+          if (msgType === "assistant") {
             // Assistant: no background, blends into unified background
             msgDiv.style.cssText += "padding: 4px 0;";
             contentDiv.style.cssText += "color: #2c3e50;";
@@ -170,8 +186,11 @@ class ChatWidget(anywidget.AnyWidget):
         }
       });
 
-      // Watch for messages trait changes
+      // Watch for messages and system trait changes
       model.on("change:messages", renderMessages);
+      model.on("change:system_model", renderMessages);
+      model.on("change:system_tools", renderMessages);
+      model.on("change:system_mcp_servers", renderMessages);
 
       // Initial render
       renderMessages();
@@ -188,6 +207,9 @@ class ChatWidget(anywidget.AnyWidget):
     """
 
     messages = traitlets.List([]).tag(sync=True)
+    system_model = traitlets.Unicode(None, allow_none=True).tag(sync=True)
+    system_tools = traitlets.List([]).tag(sync=True)
+    system_mcp_servers = traitlets.List([]).tag(sync=True)
 
     def __init__(self, client=None, **kwargs):
         super().__init__(**kwargs)
@@ -228,6 +250,17 @@ class ChatWidget(anywidget.AnyWidget):
             await self.client.query(user_input)
             async for message in self.client.receive_response():
                 parsed_msg = parse_messages([message])[0]
+
+                # Extract system info if it's a system message
+                if parsed_msg.get("type") == "system":
+                    data = parsed_msg.get("data", {})
+                    if "model" in data:
+                        self.system_model = data["model"]
+                    if "tools" in data:
+                        self.system_tools = data["tools"]
+                    if "mcp_servers" in data:
+                        self.system_mcp_servers = data["mcp_servers"]
+
                 self.messages = self.messages + [parsed_msg]
                 await asyncio.sleep(0.1)  # Visual streaming delay
         finally:
@@ -295,13 +328,6 @@ mock_session_messages = [
     },
 ]
 
-# %%
-# Test 1: Removed - now requires a client (no mock handler)
-
-# %%
-print("Test: Pre-loaded session messages (read-only view)")
-session_viewer = ChatWidget(messages=mock_session_messages)
-session_viewer
 
 # %%
 from typing import Any
@@ -347,6 +373,7 @@ await client.connect()
 
 chat = ChatWidget(client=client)
 chat
-
 # %%
-chat.messages
+print("Test: Pre-loaded session messages (read-only view)")
+session_viewer = ChatWidget(messages=mock_session_messages)
+session_viewer
