@@ -10,102 +10,127 @@ import traitlets
 class ChatWidget(anywidget.AnyWidget):
     _esm = """
     function render({ model, el }) {
-      // Container
+      // Container with unified background
       let container = document.createElement("div");
-      container.style.cssText = "display: flex; flex-direction: column; gap: 10px; padding: 10px; max-width: 900px; font-family: sans-serif;";
+      container.style.cssText = "display: flex; flex-direction: column; gap: 12px; padding: 20px; max-width: 900px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;";
 
-      // Messages container
+      // Messages container with clean, unified background
       let messagesDiv = document.createElement("div");
-      messagesDiv.style.cssText = "border: 1px solid #ccc; border-radius: 5px; padding: 10px; max-height: 500px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;";
+      messagesDiv.style.cssText = "background: #f8f9fa; border-radius: 8px; padding: 20px; max-height: 600px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;";
 
       // Streaming message preview
       let streamingDiv = document.createElement("div");
-      streamingDiv.style.cssText = "display: none; padding: 8px; background: #f0f0f0; border-radius: 5px; font-style: italic;";
+      streamingDiv.style.cssText = "display: none; padding: 8px 12px; color: #6c757d; font-style: italic; font-size: 14px;";
 
       // Input container
       let inputContainer = document.createElement("div");
-      inputContainer.style.cssText = "display: flex; gap: 5px;";
+      inputContainer.style.cssText = "display: flex; gap: 8px;";
 
       let input = document.createElement("input");
       input.type = "text";
       input.placeholder = "Type a message...";
-      input.style.cssText = "flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 5px;";
+      input.style.cssText = "flex: 1; padding: 10px 14px; border: 1px solid #dee2e6; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s;";
+      input.addEventListener("focus", () => input.style.borderColor = "#007bff");
+      input.addEventListener("blur", () => input.style.borderColor = "#dee2e6");
 
       let sendBtn = document.createElement("button");
       sendBtn.textContent = "Send";
-      sendBtn.style.cssText = "padding: 8px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;";
+      sendBtn.style.cssText = "padding: 10px 24px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s;";
+      sendBtn.addEventListener("mouseenter", () => sendBtn.style.background = "#0056b3");
+      sendBtn.addEventListener("mouseleave", () => sendBtn.style.background = "#007bff");
 
-      // Render messages with Claude Code format support
+      // Render messages with new clean design
       function renderMessages() {
         messagesDiv.innerHTML = "";
         let messages = model.get("messages");
 
-        messages.forEach((msg, idx) => {
+        messages.forEach((msg) => {
           let msgDiv = document.createElement("div");
-          msgDiv.style.cssText = "padding: 10px; border-radius: 5px; border-left: 4px solid;";
 
-          // Determine message type (support both 'type' and 'role' fields)
+          // Determine message type
           let msgType = msg.type || (msg.role === "user" ? "user" : "assistant");
+
+          // Base styling - generous spacing
+          msgDiv.style.cssText = "margin-bottom: 4px;";
+
+          // Message content container
+          let contentDiv = document.createElement("div");
+          contentDiv.style.cssText = "font-size: 15px; line-height: 1.6; color: #2c3e50;";
 
           // Style based on message type
           if (msgType === "system") {
-            msgDiv.style.backgroundColor = "#f5f5f5";
-            msgDiv.style.borderColor = "#999";
-          } else if (msgType === "assistant") {
-            msgDiv.style.backgroundColor = "#e3f2fd";
-            msgDiv.style.borderColor = "#2196f3";
-          } else if (msgType === "user") {
-            msgDiv.style.backgroundColor = "#f1f8e9";
-            msgDiv.style.borderColor = "#8bc34a";
-          }
-
-          // Message header with number and type
-          let header = document.createElement("div");
-          header.style.cssText = "font-weight: bold; margin-bottom: 8px; color: #333; font-size: 12px;";
-          header.textContent = `[${idx + 1}] ${msgType.toUpperCase()}`;
-          msgDiv.appendChild(header);
-
-          // Message content
-          let contentDiv = document.createElement("div");
-          contentDiv.style.cssText = "font-size: 14px;";
-
-          // Handle different content formats
-          if (msgType === "system") {
-            // System messages show data
-            contentDiv.style.cssText += "white-space: pre-wrap; font-family: monospace; font-size: 12px;";
+            // System: subtle gray background, compact
+            msgDiv.style.cssText += "background: #f5f5f5; padding: 12px 16px; border-radius: 6px;";
+            contentDiv.style.cssText = "font-family: monospace; font-size: 12px; color: #6c757d; white-space: pre-wrap;";
             contentDiv.textContent = JSON.stringify(msg.data || msg, null, 2);
-          } else if (msg.content) {
-            // Handle string content (simple format)
-            if (typeof msg.content === "string") {
-              contentDiv.style.cssText += "white-space: pre-wrap;";
-              contentDiv.textContent = msg.content;
+          } else if (msgType === "assistant") {
+            // Assistant: no background, blends into unified background
+            msgDiv.style.cssText += "padding: 4px 0;";
+            contentDiv.style.cssText += "color: #2c3e50;";
+
+            if (msg.content) {
+              if (typeof msg.content === "string") {
+                contentDiv.style.cssText += "white-space: pre-wrap;";
+                contentDiv.textContent = msg.content;
+              } else if (Array.isArray(msg.content)) {
+                msg.content.forEach(block => {
+                  let blockDiv = document.createElement("div");
+                  blockDiv.style.cssText = "margin-top: 8px;";
+
+                  if (block.type === "text") {
+                    blockDiv.style.cssText += "white-space: pre-wrap;";
+                    blockDiv.textContent = block.text;
+                  } else if (block.type === "tool_use") {
+                    blockDiv.style.cssText += "font-family: 'SF Mono', Monaco, monospace; font-size: 13px; color: #495057; margin: 8px 0;";
+                    blockDiv.innerHTML = `<div style="color: #6c757d; font-size: 12px; margin-bottom: 4px;">→ ${block.name}</div><div style="color: #495057;">${JSON.stringify(block.input, null, 2)}</div>`;
+                  } else if (block.type === "tool_result") {
+                    blockDiv.style.cssText += "font-family: 'SF Mono', Monaco, monospace; font-size: 12px; color: #6c757d; white-space: pre-wrap; margin: 8px 0;";
+                    let resultPreview = typeof block.content === "string"
+                      ? block.content.substring(0, 300)
+                      : JSON.stringify(block.content, null, 2).substring(0, 300);
+                    if (resultPreview.length >= 300) resultPreview += "...";
+                    blockDiv.textContent = resultPreview;
+                  } else {
+                    blockDiv.style.cssText += "font-family: monospace; font-size: 12px; color: #6c757d;";
+                    blockDiv.textContent = JSON.stringify(block, null, 2);
+                  }
+
+                  contentDiv.appendChild(blockDiv);
+                });
+              }
             }
-            // Handle array of content blocks (Claude Code format)
-            else if (Array.isArray(msg.content)) {
-              msg.content.forEach(block => {
-                let blockDiv = document.createElement("div");
-                blockDiv.style.cssText = "margin-top: 6px;";
+          } else if (msgType === "user") {
+            // User: subtle background bubble
+            msgDiv.style.cssText += "background: #e8f5e9; padding: 12px 16px; border-radius: 8px; max-width: 80%; align-self: flex-end;";
+            contentDiv.style.cssText += "color: #1b5e20;";
 
-                if (block.type === "text") {
-                  blockDiv.style.cssText += "white-space: pre-wrap;";
-                  blockDiv.textContent = block.text;
-                } else if (block.type === "tool_use") {
-                  blockDiv.style.cssText += "padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px; font-family: monospace; font-size: 12px;";
-                  blockDiv.innerHTML = `<strong>[tool_use: ${block.name}]</strong><br>id: ${block.id}<br>input: ${JSON.stringify(block.input, null, 2)}`;
-                } else if (block.type === "tool_result") {
-                  blockDiv.style.cssText += "padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px; font-family: monospace; font-size: 12px; white-space: pre-wrap;";
-                  let resultPreview = typeof block.content === "string"
-                    ? block.content.substring(0, 300)
-                    : JSON.stringify(block.content, null, 2).substring(0, 300);
-                  if (resultPreview.length >= 300) resultPreview += "...";
-                  blockDiv.innerHTML = `<strong>[tool_result]</strong><br>${resultPreview}`;
-                } else {
-                  blockDiv.style.cssText += "padding: 8px; background: rgba(0,0,0,0.05); border-radius: 3px; font-family: monospace; font-size: 12px;";
-                  blockDiv.textContent = JSON.stringify(block, null, 2);
-                }
+            if (msg.content) {
+              if (typeof msg.content === "string") {
+                contentDiv.style.cssText += "white-space: pre-wrap;";
+                contentDiv.textContent = msg.content;
+              } else if (Array.isArray(msg.content)) {
+                msg.content.forEach(block => {
+                  let blockDiv = document.createElement("div");
+                  blockDiv.style.cssText = "margin-top: 6px;";
 
-                contentDiv.appendChild(blockDiv);
-              });
+                  if (block.type === "text") {
+                    blockDiv.style.cssText += "white-space: pre-wrap;";
+                    blockDiv.textContent = block.text;
+                  } else if (block.type === "tool_result") {
+                    blockDiv.style.cssText += "font-family: monospace; font-size: 12px; color: #2e7d32; white-space: pre-wrap; margin: 8px 0;";
+                    let resultPreview = typeof block.content === "string"
+                      ? block.content.substring(0, 300)
+                      : JSON.stringify(block.content, null, 2).substring(0, 300);
+                    if (resultPreview.length >= 300) resultPreview += "...";
+                    blockDiv.textContent = resultPreview;
+                  } else {
+                    blockDiv.style.cssText += "font-family: monospace; font-size: 12px;";
+                    blockDiv.textContent = JSON.stringify(block, null, 2);
+                  }
+
+                  contentDiv.appendChild(blockDiv);
+                });
+              }
             }
           }
 
