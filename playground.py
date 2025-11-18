@@ -2,8 +2,7 @@
 # type: ignore
 # ruff: noqa
 # Third test: Chatbot widget with streaming
-import threading
-import time
+import asyncio
 
 import anywidget
 import traitlets
@@ -190,16 +189,10 @@ class ChatWidget(anywidget.AnyWidget):
 
     messages = traitlets.List([]).tag(sync=True)
 
-    def __init__(self, handler=None, client=None, **kwargs):
+    def __init__(self, client=None, **kwargs):
         super().__init__(**kwargs)
-
-        # Validate: either handler OR client, not both
-        if handler and client:
-            raise ValueError("Provide either 'handler' or 'client', not both")
-
         self.client = client
-        self.handler = handler or self._mock_chat_handler
-        self._is_processing = False  # Track if client/handler is busy
+        self._is_processing = False  # Track if client is busy
         self.on_msg(self._handle_custom_msg)
 
     def _handle_custom_msg(self, content, buffers):
@@ -221,104 +214,25 @@ class ChatWidget(anywidget.AnyWidget):
                     "content": [{"type": "text", "text": user_content}],
                 }
             ]
-            # Start streaming response in background thread
-            threading.Thread(
-                target=self._stream_response, args=(user_content,), daemon=True
-            ).start()
+            # Schedule async response handling
+            asyncio.create_task(self._handle_response(user_content))
 
-    def _stream_response(self, user_input):
-        """Stream complete messages one by one from client or handler."""
+    async def _handle_response(self, user_input):
+        """Handle async client response - streams messages as they arrive."""
+        from claude_code_utils import parse_messages
+
         self._is_processing = True
         self.send({"type": "stream_start"})
 
         try:
-            if self.client:
-                # Use client path - stream from async client
-                for message in self._client_handler(user_input):
-                    self.messages = self.messages + [message]
-                    time.sleep(0.1)  # Small delay for visual effect
-            else:
-                # Use handler path (original behavior)
-                for message in self.handler():
-                    self.messages = self.messages + [message]
-                    time.sleep(0.5)  # Delay between messages for visual effect
+            await self.client.query(user_input)
+            async for message in self.client.receive_response():
+                parsed_msg = parse_messages([message])[0]
+                self.messages = self.messages + [parsed_msg]
+                await asyncio.sleep(0.1)  # Visual streaming delay
         finally:
             self._is_processing = False
             self.send({"type": "stream_end"})
-
-    def _client_handler(self, user_input):
-        """Adapter: converts async client into sync generator of message dicts."""
-        import asyncio
-        from claude_code_utils import parse_messages
-
-        # Async function to query client and collect responses
-        async def async_query():
-            await self.client.query(user_input)
-            messages = []
-            async for message in self.client.receive_response():
-                messages.append(message)
-            return parse_messages(messages)
-
-        # Bridge async to sync - handle different event loop scenarios
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Event loop already running (Jupyter) - use ThreadPoolExecutor
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, async_query())
-                    parsed_messages = future.result()
-            else:
-                # No running loop - use existing loop
-                parsed_messages = loop.run_until_complete(async_query())
-        except RuntimeError:
-            # No event loop exists - create one
-            parsed_messages = asyncio.run(async_query())
-
-        # Yield each message (generator interface)
-        for msg in parsed_messages:
-            yield msg
-
-    def _mock_chat_handler(self):
-        """Mock streaming chat handler that yields Claude Code format messages."""
-        # Simulate multi-step response like tool use
-        yield {
-            "type": "assistant",
-            "content": [
-                {"type": "text", "text": "Let me check the weather for you..."}
-            ],
-        }
-        yield {
-            "type": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_weather_123",
-                    "name": "get_weather",
-                    "input": {"location": "current"},
-                }
-            ],
-        }
-        yield {
-            "type": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "toolu_weather_123",
-                    "content": '{"temperature": 72, "condition": "Sunny"}',
-                }
-            ],
-        }
-        yield {
-            "type": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "The weather is sunny today with a temperature of 72°F!",
-                }
-            ],
-        }
 
 
 # Mock Claude Code session messages
@@ -382,14 +296,10 @@ mock_session_messages = [
 ]
 
 # %%
-print("Test 1: Interactive chat with streaming (type a message)")
-chat = ChatWidget()
-chat
+# Test 1: Removed - now requires a client (no mock handler)
 
 # %%
-
-
-print("Test 2: Pre-loaded session messages (read-only view)")
+print("Test: Pre-loaded session messages (read-only view)")
 session_viewer = ChatWidget(messages=mock_session_messages)
 session_viewer
 
@@ -435,23 +345,8 @@ options = ClaudeAgentOptions(
 client = ClaudeSDKClient(options=options)
 await client.connect()
 
-prompt = "Hello there"
-await client.query(prompt)
-
-messages = []
-async for message in client.receive_response():
-    # Process the new response
-    messages.append(message)
-    print(message)
-
-await client.disconnect()
-
-
-# chat = ChatWidget(client=client)
-# chat
-# %%
-from claude_code_utils import parse_messages
-
-chat = ChatWidget(messages=parse_messages(messages))
+chat = ChatWidget(client=client)
 chat
+
 # %%
+chat.messages
